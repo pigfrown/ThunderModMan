@@ -113,8 +113,19 @@
         <!-- Installed View -->
         <div class="view" id="installed-view">
           <header class="view-header">
-            <h1>Installed Mods</h1>
-            <span class="installed-count-badge" id="installed-badge">0</span>
+            <div class="header-left" style="display: flex; align-items: center; gap: 12px;">
+              <h1>Installed Mods</h1>
+              <span class="installed-count-badge" id="installed-badge">0</span>
+            </div>
+            <div class="header-actions">
+              <button id="check-updates-btn" class="refresh-btn">Check Updates</button>
+              <input type="text" id="installed-search" placeholder="Search installed..." style="padding: 8px 12px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text-primary);">
+              <select id="installed-sort" style="padding: 8px 12px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text-primary);">
+                <option value="name">Name (A-Z)</option>
+                <option value="date-desc">Newest</option>
+                <option value="date-asc">Oldest</option>
+              </select>
+            </div>
           </header>
 
           <div class="installed-grid" id="installed-list">

@@ -108,6 +108,28 @@ app.post('/api/install', async (req, res) => {
 });
 
 /**
+ * Update a mod
+ */
+app.post('/api/update', async (req, res) => {
+  try {
+    const { community, fullName } = req.body;
+    if (!community || !fullName) {
+      return res.status(400).json({ error: 'community and fullName required' });
+    }
+
+    const pkg = await thunderstore.getPackageByName(community, fullName);
+    if (!pkg) {
+      return res.status(404).json({ error: 'Package not found on Thunderstore' });
+    }
+
+    const result = await mods.updateMod(pkg);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
  * Uninstall a mod
  */
 app.delete('/api/uninstall/:fullName', async (req, res) => {

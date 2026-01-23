@@ -116,10 +116,101 @@ async function isInstalled(fullName) {
   return installed.some(m => m.fullName === fullName);
 }
 
+/**
+ * Restore config files from backup directory
+ */
+async function restoreConfigs(src, dest) {
+  try {
+    const entries = await fs.readdir(src, { withFileTypes: true });
+    for (const entry of entries) {
+      const srcPath = path.join(src, entry.name);
+      const destPath = path.join(dest, entry.name);
+      
+      if (entry.isDirectory()) {
+         await restoreConfigs(srcPath, destPath);
+      } else {
+        // Restore .cfg, .json (except manifest), .xml, .yml
+        if (entry.name.match(/\.(cfg|json|xml|yml|yaml)$/) && entry.name !== 'manifest.json') {
+          await fs.mkdir(path.dirname(destPath), { recursive: true });
+          await fs.copyFile(srcPath, destPath);
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error restoring configs:', e);
+  }
+}
+
+/**
+ * Update a mod
+ * @param {Object} pkg - Package object
+ */
+async function updateMod(pkg) {
+  const installed = await getInstalledMods();
+  const existing = installed.find(m => m.fullName === pkg.fullName);
+  
+  if (!existing) {
+    return { success: false, message: 'Mod not installed' };
+  }
+
+  const modDir = path.join(MODS_DIR, pkg.fullName);
+  const backupDir = path.join(MODS_DIR, pkg.fullName + '_backup');
+
+  try {
+    // 1. Backup existing
+    if (await fs.stat(modDir).catch(() => false)) {
+      await fs.rename(modDir, backupDir);
+    }
+
+    // 2. Download and Install New
+    const response = await fetch(pkg.downloadUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to download mod: ${response.status}`);
+    }
+
+    await fs.mkdir(modDir, { recursive: true });
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const stream = Readable.from(buffer);
+    
+    await new Promise((resolve, reject) => {
+      stream
+        .pipe(unzipper.Extract({ path: modDir }))
+        .on('close', resolve)
+        .on('error', reject);
+    });
+
+    // 3. Restore Configs
+    if (await fs.stat(backupDir).catch(() => false)) {
+      await restoreConfigs(backupDir, modDir);
+      // Clean backup
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+
+    // 4. Update installed list
+    existing.version = pkg.latestVersion;
+    existing.icon = pkg.icon;
+    existing.updatedAt = new Date().toISOString();
+    
+    await saveInstalledMods(installed);
+
+    return { success: true, message: `Updated ${pkg.fullName} to v${pkg.latestVersion}` };
+  } catch (e) {
+    // Rollback attempt
+    console.error('Update failed, rolling back...', e);
+    if (await fs.stat(backupDir).catch(() => false)) {
+      await fs.rm(modDir, { recursive: true, force: true });
+      await fs.rename(backupDir, modDir);
+    }
+    throw e;
+  }
+}
+
 module.exports = {
   getInstalledMods,
   installMod,
   uninstallMod,
+  updateMod,
   isInstalled,
   MODS_DIR
 };

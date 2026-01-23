@@ -8,6 +8,7 @@ let rightSidebarVisible = true;
 let pendingUninstall = null;
 let activeCategories = new Set();
 
+let availableUpdates = new Map();
 // DOM Elements - Navigation
 const navTabs = document.querySelectorAll('.nav-tab');
 const views = document.querySelectorAll('.view');
@@ -28,6 +29,9 @@ const categoryFilters = document.getElementById('category-filters');
 // DOM Elements - Installed View
 const installedList = document.getElementById('installed-list');
 const installedBadgeEl = document.getElementById('installed-badge');
+const installedSearchInput = document.getElementById('installed-search');
+const installedSortSelect = document.getElementById('installed-sort');
+const checkUpdatesBtn = document.getElementById('check-updates-btn');
 
 // DOM Elements - Server View
 const serverStatusCard = document.getElementById('server-status-card');
@@ -98,6 +102,15 @@ async function installMod(community, fullName) {
 async function uninstallMod(fullName) {
   const res = await fetch(`/api/uninstall/${encodeURIComponent(fullName)}`, {
     method: 'DELETE'
+  });
+  return res.json();
+}
+
+async function updateMod(community, fullName) {
+  const res = await fetch('/api/update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ community, fullName })
   });
   return res.json();
 }
@@ -261,12 +274,32 @@ function renderModGrid(mods) {
 }
 
 function renderInstalledMods() {
-  const count = installedMods.length;
+  const query = installedSearchInput ? installedSearchInput.value.toLowerCase().trim() : '';
+  const sortBy = installedSortSelect ? installedSortSelect.value : 'name';
+
+  // Filter and Sort
+  let filtered = [...installedMods];
+
+  if (query) {
+    filtered = filtered.filter(mod => 
+      mod.name.toLowerCase().includes(query) || 
+      mod.fullName.toLowerCase().includes(query)
+    );
+  }
+
+  filtered.sort((a, b) => {
+    if (sortBy === 'name') return a.name.localeCompare(b.name);
+    if (sortBy === 'date-desc') return (new Date(b.installedAt || 0)) - (new Date(a.installedAt || 0));
+    if (sortBy === 'date-asc') return (new Date(a.installedAt || 0)) - (new Date(b.installedAt || 0));
+    return 0;
+  });
+
+  const count = installedMods.length; // Total count for badge
   installedCountEl.textContent = count;
   installedBadgeEl.textContent = count;
   navInstalledBadge.textContent = count;
 
-  if (!count) {
+  if (installedMods.length === 0) {
     installedList.innerHTML = `
       <div class="empty-state">
         <div class="empty-icon">∅</div>
@@ -276,22 +309,43 @@ function renderInstalledMods() {
     return;
   }
 
-  installedList.innerHTML = installedMods.map(mod => `
+  if (filtered.length === 0) {
+    installedList.innerHTML = `
+      <div class="empty-state">
+        <p>No matching mods found</p>
+      </div>
+    `;
+    return;
+  }
+
+  installedList.innerHTML = filtered.map(mod => {
+    const newVersion = availableUpdates.get(mod.fullName);
+    return `
     <div class="installed-item">
       <img class="installed-icon" src="${mod.icon || ''}" alt="" onerror="this.style.display='none'">
       <div class="installed-info">
         <div class="installed-name">${mod.name}</div>
-        <div class="installed-version">v${mod.version}</div>
+        <div class="installed-version">
+          v${mod.version}
+          ${newVersion ? `<span style="color: var(--success); font-weight: bold; margin-left: 6px;">➜ v${newVersion}</span>` : ''}
+        </div>
       </div>
-      <button class="uninstall-btn" data-fullname="${mod.fullName}" data-name="${mod.name}">Remove</button>
+      <div class="installed-actions" style="display: flex; gap: 8px; align-items: center;">
+        ${newVersion ? `<button class="install-btn" style="padding: 6px 12px; font-size: 0.8rem;" data-action="update" data-fullname="${mod.fullName}">Update</button>` : ''}
+        <button class="uninstall-btn" data-fullname="${mod.fullName}" data-name="${mod.name}">Remove</button>
+      </div>
     </div>
-  `).join('');
+  `}).join('');
 
   // Add click handlers
-  installedList.querySelectorAll('.uninstall-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      showUninstallConfirm(btn.dataset.fullname, btn.dataset.name);
-    });
+  installedList.querySelectorAll('button').forEach(btn => {
+    if (btn.dataset.action === 'update') {
+      btn.addEventListener('click', () => executeUpdate(btn.dataset.fullname));
+    } else if (btn.classList.contains('uninstall-btn')) {
+      btn.addEventListener('click', () => {
+        showUninstallConfirm(btn.dataset.fullname, btn.dataset.name);
+      });
+    }
   });
 }
 
@@ -441,6 +495,80 @@ async function handleStartServer() {
   startServerBtn.textContent = '▶ Start';
 }
 
+// Update Logic
+function compareVersions(v1, v2) {
+  const p1 = v1.split('.').map(Number);
+  const p2 = v2.split('.').map(Number);
+  for (let i = 0; i < Math.max(p1.length, p2.length); i++) {
+    const n1 = p1[i] || 0;
+    const n2 = p2[i] || 0;
+    if (n1 > n2) return 1;
+    if (n1 < n2) return -1;
+  }
+  return 0;
+}
+
+async function handleCheckUpdates() {
+  checkUpdatesBtn.disabled = true;
+  checkUpdatesBtn.textContent = 'Checking...';
+  
+  try {
+    let pkgs = packages;
+    if (!pkgs.length && currentCommunity) {
+      pkgs = await fetchPackages(currentCommunity);
+    } // If still empty or no community, we can't check efficiently without knowing community.
+    
+    if (!pkgs.length) {
+      showToast('Please select a game in Browse first to check versions', 'info');
+      checkUpdatesBtn.disabled = false;
+      checkUpdatesBtn.textContent = 'Check Updates';
+      return;
+    }
+
+    availableUpdates.clear();
+    let updateCount = 0;
+
+    for (const mod of installedMods) {
+      const remote = pkgs.find(p => p.fullName === mod.fullName);
+      if (remote) {
+        if (compareVersions(remote.latestVersion, mod.version) > 0) {
+          availableUpdates.set(mod.fullName, remote.latestVersion);
+          updateCount++;
+        }
+      }
+    }
+
+    if (updateCount > 0) {
+      showToast(`Found ${updateCount} updates`, 'success');
+    } else {
+      showToast('All mods up to date', 'success');
+    }
+    renderInstalledMods();
+  } catch (e) {
+    showToast('Check failed: ' + e.message, 'error');
+  } finally {
+    checkUpdatesBtn.disabled = false;
+    checkUpdatesBtn.textContent = 'Check Updates';
+  }
+}
+
+async function executeUpdate(fullName) {
+  showToast(`Updating ${fullName}...`, 'info');
+  try {
+    const result = await updateMod(currentCommunity, fullName);
+    if (result.success) {
+      showToast(`Updated ${fullName}`, 'success');
+      await refreshInstalled();
+      availableUpdates.delete(fullName);
+      renderInstalledMods();
+    } else {
+      showToast(result.message || 'Update failed', 'error');
+    }
+  } catch (e) {
+    showToast('Update error', 'error');
+  }
+}
+
 async function handleStopServer() {
   stopServerBtn.disabled = true;
   stopServerBtn.textContent = 'Stopping...';
@@ -516,6 +644,7 @@ async function refreshServerStatus() {
     // Update button states
     startServerBtn.disabled = status.running;
     stopServerBtn.disabled = !status.running;
+    restartServerBtn.disabled = !status.running;
     
     // Update sidebar status
     const sidebarDot = sidebarServerStatus.querySelector('.status-dot');
@@ -656,6 +785,11 @@ communitySelect.addEventListener('change', handleCommunityChange);
 refreshBtn.addEventListener('click', handleCommunityChange);
 filterToggleBtn.addEventListener('click', toggleFilterDropdown);
 sortSelect.addEventListener('change', handleSearch);
+
+// Event Listeners - Installed View
+if (installedSearchInput) installedSearchInput.addEventListener('input', renderInstalledMods);
+if (installedSortSelect) installedSortSelect.addEventListener('change', renderInstalledMods);
+if (checkUpdatesBtn) checkUpdatesBtn.addEventListener('click', handleCheckUpdates);
 
 // Event Listeners - Server View
 startServerBtn.addEventListener('click', handleStartServer);
