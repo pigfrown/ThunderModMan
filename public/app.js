@@ -1020,3 +1020,61 @@ async function deleteBackup(filename) {
 }
 
 setupBackups();
+
+// === Profile Export ===
+const exportProfileBtn = document.getElementById('export-profile-btn');
+const profileModal = document.getElementById('profile-modal');
+const profileModalClose = document.getElementById('profile-modal-close');
+const profileModalCancel = document.getElementById('profile-modal-cancel');
+const profileCodeOutput = document.getElementById('profile-code-output');
+const profileModCount = document.getElementById('profile-mod-count');
+const profileCopyBtn = document.getElementById('profile-copy-btn');
+
+async function openProfileExport() {
+  profileCodeOutput.value = 'Generating...';
+  profileModCount.textContent = '';
+  profileModal.classList.add('open');
+
+  try {
+    const res = await fetch('/api/profile/export');
+    const data = await res.json();
+
+    if (data.error) {
+      profileCodeOutput.value = '';
+      profileModCount.textContent = data.error;
+      return;
+    }
+
+    profileCodeOutput.value = data.profileCode;
+    profileModCount.textContent = `${data.modCount} mod${data.modCount !== 1 ? 's' : ''} included`;
+  } catch (e) {
+    profileCodeOutput.value = '';
+    profileModCount.textContent = 'Failed to generate profile: ' + e.message;
+  }
+}
+
+function closeProfileModal() {
+  profileModal.classList.remove('open');
+}
+
+async function copyProfileCode() {
+  const code = profileCodeOutput.value;
+  if (!code || code === 'Generating...') return;
+
+  try {
+    await navigator.clipboard.writeText(code);
+    profileCopyBtn.textContent = 'Copied!';
+    setTimeout(() => { profileCopyBtn.textContent = 'Copy to Clipboard'; }, 2000);
+  } catch (e) {
+    profileCodeOutput.select();
+    showToast('Press Ctrl+C to copy', 'info');
+  }
+}
+
+if (exportProfileBtn) exportProfileBtn.addEventListener('click', openProfileExport);
+if (profileModalClose) profileModalClose.addEventListener('click', closeProfileModal);
+if (profileModalCancel) profileModalCancel.addEventListener('click', closeProfileModal);
+if (profileCopyBtn) profileCopyBtn.addEventListener('click', copyProfileCode);
+profileModal.addEventListener('click', (e) => {
+  if (e.target === profileModal) closeProfileModal();
+});

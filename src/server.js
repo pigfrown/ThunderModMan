@@ -491,6 +491,30 @@ app.delete('/api/backups/:filename', (req, res) => {
   }
 });
 
+/**
+ * Export installed mods as a r2modman/Thunderstore Mod Manager profile code
+ */
+app.get('/api/profile/export', async (req, res) => {
+  try {
+    const zlib = require('zlib');
+    const installed = await mods.getInstalledMods();
+
+    if (installed.length === 0) {
+      return res.status(400).json({ error: 'No mods installed' });
+    }
+
+    const modLines = installed.map(m => `  - ${m.fullName}-${m.version}`).join('\n');
+    const yaml = `mods:\n${modLines}\n`;
+
+    const compressed = zlib.gzipSync(Buffer.from(yaml, 'utf-8'));
+    const profileCode = compressed.toString('base64');
+
+    res.json({ profileCode, modCount: installed.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Start server
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`ThunderModMan running on http://0.0.0.0:${PORT}`);
